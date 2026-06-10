@@ -58,23 +58,13 @@ fn draw_overview(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// One cell of the overview grid: bordered block titled "<NAME>  <value>" with
-/// the graph inside. CPU/Memory render as lines; Network/Disk as filled areas.
-fn draw_mini(f: &mut Frame, area: Rect, metric: &Metric, idx: usize) {
-    // Headline value pulled from the most relevant stat for this metric.
-    let key = match idx {
-        0 => "Usage",
-        1 => "Pressure",
-        2 => "In/sec",
-        _ => "Read/sec",
-    };
-    let head = metric
-        .stats
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-        .unwrap_or("");
+/// Width reserved for the stats column inside each overview cell.
+const MINI_STATS_W: u16 = 20;
 
+/// One cell of the overview grid: bordered, titled block holding a stats
+/// column (label/value pairs) and the metric's graph. CPU/Memory render as
+/// lines; Network/Disk as filled mirrored areas.
+fn draw_mini(f: &mut Frame, area: Rect, metric: &Metric, idx: usize) {
     let mem_color = pressure_color(metric.primary().last().copied().unwrap_or(0));
     let accent = match idx {
         0 => GREEN,
@@ -84,17 +74,50 @@ fn draw_mini(f: &mut Frame, area: Rect, metric: &Metric, idx: usize) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {}  {} ", metric.title, head))
+        .title(format!(" {} ", metric.title))
         .title_alignment(Alignment::Center)
         .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // Reserve a stats column on the left when the cell is wide enough.
+    let graph_area = if inner.width > MINI_STATS_W + 8 {
+        let parts = Layout::horizontal([
+            Constraint::Length(MINI_STATS_W),
+            Constraint::Min(8),
+        ])
+        .split(inner);
+        draw_mini_stats(f, parts[0], &metric.stats);
+        parts[1]
+    } else {
+        inner
+    };
+
     match idx {
-        0 => line_into(f, inner, &metric.primary(), GREEN),
-        1 => line_into(f, inner, &metric.primary(), mem_color),
-        _ => area_into(f, inner, metric, accent, RED),
+        0 => line_into(f, graph_area, &metric.primary(), GREEN),
+        1 => line_into(f, graph_area, &metric.primary(), mem_color),
+        _ => area_into(f, graph_area, metric, accent, RED),
     }
+}
+
+/// Render label/value stat pairs, one per line, value right-aligned.
+fn draw_mini_stats(f: &mut Frame, area: Rect, stats: &[(String, String)]) {
+    let w = area.width as usize;
+    let label = Style::default().fg(Color::Gray);
+    let value = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+    let lines: Vec<Line> = stats
+        .iter()
+        .take(area.height as usize)
+        .map(|(k, v)| {
+            let pad = w.saturating_sub(k.len() + v.len() + 1).max(1);
+            Line::from(vec![
+                Span::styled(k.clone(), label),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(v.clone(), value),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 /// Full-width process table (PID-ordered, stable) with optional search box.
@@ -391,6 +414,9 @@ mod tests {
         for t in ["CPU", "MEMORY", "NETWORK", "DISK"] {
             assert!(text.contains(t), "overview should label {t}");
         }
+        // Side stats render (label text present).
+        assert!(text.contains("Usage"), "CPU stats column should show");
+        assert!(text.contains("In/sec"), "Network stats column should show");
     }
 
     #[test]
@@ -485,3 +511,4 @@ mod tests {
         assert!(text.contains("Safari") && !text.contains("kernel_task"));
     }
 }
+
