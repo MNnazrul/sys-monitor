@@ -278,7 +278,7 @@ fn bytes(n: u64) -> String {
 fn line_into(f: &mut Frame, inner: Rect, data: &[u64], color: Color) {
     let cols = inner.width.max(1) as f64;
     let want = inner.width as usize + 1;
-    let vis: Vec<f64> = if data.len() + 1 >= want {
+    let vis: Vec<f64> = if data.len() >= want {
         data[data.len() - want..].iter().map(|&v| v as f64).collect()
     } else {
         std::iter::once(0.0)
@@ -417,6 +417,20 @@ mod tests {
         // Side stats render (label text present).
         assert!(text.contains("Usage"), "CPU stats column should show");
         assert!(text.contains("In/sec"), "Network stats column should show");
+    }
+
+    #[test]
+    fn line_graph_never_overflows_across_widths() {
+        // Regression: a sample count equal to graph width − 1 used to underflow.
+        for w in [40u16, 80, 120] {
+            let mut app = App::new();
+            for n in 0..(w as u64 + 4) {
+                app.metrics[0].update(n % 100, None, "CPU", vec![("Usage".into(), "x".into())]);
+                let mut term = Terminal::new(TestBackend::new(w, 20)).unwrap();
+                // Must not panic for any history length.
+                term.draw(|f| draw(f, &app)).unwrap();
+            }
+        }
     }
 
     #[test]
