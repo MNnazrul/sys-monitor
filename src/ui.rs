@@ -6,8 +6,12 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols::Marker,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    widgets::{
+        Block, Borders, Paragraph, Tabs,
+        canvas::{Canvas, Line as CanvasLine},
+    },
 };
 
 const SIDE_WIDTH: u16 = 24;
@@ -65,15 +69,57 @@ pub fn draw(f: &mut Frame, app: &App) {
     };
     let half = metric.stats.len().div_ceil(2);
 
-    // Percentages get a fixed 0–100 scale; rates auto-scale to their peak.
-    let scale = match app.tab {
-        Tab::Cpu | Tab::Memory => Some(100),
-        _ => None,
-    };
-
     draw_stats(f, panes[0], &metric.stats[..half.min(metric.stats.len())]);
-    draw_graph(f, panes[1], metric, up, down, scale);
+    if app.tab == Tab::Memory {
+        // Memory shown as a smooth line on a fixed 0–100 scale.
+        draw_line_graph(f, panes[1], metric, up);
+    } else {
+        // Percentages get a fixed 0–100 scale; rates auto-scale to their peak.
+        let scale = match app.tab {
+            Tab::Cpu => Some(100),
+            _ => None,
+        };
+        draw_graph(f, panes[1], metric, up, down, scale);
+    }
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
+}
+
+/// A smooth braille line graph on a fixed 0–100 scale (used for Memory).
+/// Right-anchored: the newest sample sits at the far-right edge.
+fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
+    let block = graph_block(&metric.title);
+    let inner = block.inner(area);
+    let cols = inner.width.max(1) as f64;
+
+    let all = metric.primary();
+    // Keep one point per horizontal column (newest on the right).
+    let take = (inner.width as usize + 1).min(all.len());
+    let vis: Vec<f64> = all[all.len() - take..].iter().map(|&v| v as f64).collect();
+    let m = vis.len();
+
+    let canvas = Canvas::default()
+        .block(block)
+        .marker(Marker::Braille)
+        .x_bounds([0.0, cols])
+        .y_bounds([0.0, 100.0])
+        .paint(move |ctx| {
+            if m < 2 {
+                return;
+            }
+            for i in 0..m - 1 {
+                // Right-anchor: oldest visible sample maps left, newest to cols.
+                let x1 = cols - (m - 1 - i) as f64;
+                let x2 = cols - (m - 2 - i) as f64;
+                ctx.draw(&CanvasLine {
+                    x1,
+                    y1: vis[i],
+                    x2,
+                    y2: vis[i + 1],
+                    color,
+                });
+            }
+        });
+    f.render_widget(canvas, area);
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -98,12 +144,17 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tabs, area);
 }
 
-fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color, scale: Option<u64>) {
-    let block = Block::default()
+/// Bordered, centered-title block used by every graph pane.
+fn graph_block(title: &str) -> Block<'static> {
+    Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", metric.title))
+        .title(format!(" {title} "))
         .title_alignment(Alignment::Center)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::DarkGray))
+}
+
+fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color, scale: Option<u64>) {
+    let block = graph_block(&metric.title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -194,5 +245,25 @@ mod tests {
         let min_x = *xs.iter().min().unwrap();
         assert!(max_x >= 73, "newest sample should sit at the far right (got {max_x})");
         assert!(min_x >= 69, "only the last few columns filled (got {min_x})");
+    }
+
+    #[test]
+    fn memory_renders_braille_line() {
+        let mut app = App::new();
+        app.tab = Tab::Memory;
+        for i in 0..200u64 {
+            let v = (60.0 + (i as f64 * 0.15).sin() * 18.0) as u64;
+            app.metrics[1].update(v, None, "MEMORY", vec![("Pressure".into(), format!("{v}%"))]);
+        }
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let buf = term.backend().buffer();
+
+        // Canvas line uses braille glyphs (U+2800..U+28FF).
+        let drew_line = buf
+            .content()
+            .iter()
+            .any(|c| c.symbol().chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)));
+        assert!(drew_line, "memory tab should render a braille line");
     }
 }
