@@ -70,16 +70,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     let half = metric.stats.len().div_ceil(2);
 
     draw_stats(f, panes[0], &metric.stats[..half.min(metric.stats.len())]);
-    if app.tab == Tab::Memory {
-        // Memory shown as a smooth line on a fixed 0–100 scale.
-        draw_line_graph(f, panes[1], metric, up);
-    } else {
-        // Percentages get a fixed 0–100 scale; rates auto-scale to their peak.
-        let scale = match app.tab {
-            Tab::Cpu => Some(100),
-            _ => None,
-        };
-        draw_graph(f, panes[1], metric, up, down, scale);
+    match app.tab {
+        // Percentages: smooth line on a fixed 0–100 scale.
+        Tab::Cpu | Tab::Memory => draw_line_graph(f, panes[1], metric, up),
+        // Rates: filled area, auto-scaled to peak.
+        _ => draw_graph(f, panes[1], metric, up, down, None),
     }
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
 }
@@ -219,16 +214,17 @@ mod tests {
     #[test]
     fn renders_without_panic_and_fills() {
         let mut app = App::new();
-        // A few samples; graph must right-anchor (newest at the far-right column).
-        for v in [10u64, 30, 50, 70, 90] {
-            app.metrics[0].update(v, None, "CPU", vec![("Usage".into(), format!("{v}%"))]);
+        app.tab = Tab::Network;
+        // A few samples; filled graph must right-anchor (newest at far right).
+        for (rx, tx) in [(10u64, 5u64), (30, 15), (50, 25), (70, 35), (90, 45)] {
+            app.metrics[2].update(rx, Some(tx), "NETWORK", vec![("In".into(), format!("{rx}"))]);
         }
         let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
         term.draw(|f| draw(f, &app)).unwrap();
         let buf = term.backend().buffer();
 
-        // Collect the x of every filled block cell.
-        let fill = "▁▂▃▄▅▆▇█";
+        // Collect the x of every filled block cell (up and down glyphs).
+        let fill = "▁▂▃▄▅▆▇█▀";
         let mut xs: Vec<u16> = vec![];
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
