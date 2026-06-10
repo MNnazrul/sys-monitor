@@ -130,28 +130,31 @@ mod tests {
     #[test]
     fn renders_without_panic_and_fills() {
         let mut app = App::new();
-        app.tab = Tab::Network;
-        // Inject synthetic in/out waves into the Network metric.
-        for i in 0..120u64 {
-            let rx = (((i as f64 * 0.5).sin() * 0.5 + 0.5) * 100.0) as u64;
-            let tx = (((i as f64 * 0.3).cos() * 0.5 + 0.5) * 60.0) as u64;
-            app.metrics[2].update(
-                rx,
-                Some(tx),
-                "NETWORK",
-                vec![
-                    ("In/sec".into(), format!("{rx} KB/s")),
-                    ("Out/sec".into(), format!("{tx} KB/s")),
-                    ("Total in".into(), "3.0 GB".into()),
-                    ("Total out".into(), "323 MB".into()),
-                ],
-            );
+        // A few samples; graph must right-anchor (newest at the far-right column).
+        for v in [10u64, 30, 50, 70, 90] {
+            app.metrics[0].update(v, None, "CPU", vec![("Usage".into(), format!("{v}%"))]);
         }
         let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
         term.draw(|f| draw(f, &app)).unwrap();
-        // Some block glyph must have been drawn in the graph region.
         let buf = term.backend().buffer();
-        let drew_fill = buf.content().iter().any(|c| "▁▂▃▄▅▆▇█".contains(c.symbol()));
-        assert!(drew_fill, "graph should render filled block glyphs");
+
+        // Collect the x of every filled block cell.
+        let fill = "▁▂▃▄▅▆▇█";
+        let mut xs: Vec<u16> = vec![];
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                if fill.contains(buf.cell((x, y)).unwrap().symbol()) {
+                    xs.push(x);
+                }
+            }
+        }
+        assert!(!xs.is_empty(), "graph should render filled block glyphs");
+
+        // Graph pane inner right edge with width 100 = col 74. Right-anchored:
+        // 5 samples occupy only the ~5 rightmost columns, nothing further left.
+        let max_x = *xs.iter().max().unwrap();
+        let min_x = *xs.iter().min().unwrap();
+        assert!(max_x >= 73, "newest sample should sit at the far right (got {max_x})");
+        assert!(min_x >= 69, "only the last few columns filled (got {min_x})");
     }
 }
