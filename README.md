@@ -4,19 +4,13 @@ A terminal system-activity monitor in the spirit of macOS Activity Monitor,
 built with [ratatui](https://ratatui.rs). Live graphs for CPU, memory, network,
 and disk on one screen, plus a searchable, scrollable process list.
 
-```
-┌──────────── CPU  27% ───────────┐┌────────── MEMORY  83% ──────────┐
-│Usage      27%   ⢀⠔⠒⠢⡀           ││Physical  16.0 GB                │
-│Cores        8  ⡔⠁   ⠈⢆          ││Used      12.4 GB     ⢀⣀⡠⠤⠒⠉     │
-│Busiest    73% ⡜      ⠱⡀         ││Cached     2.1 GB ⡠⠤⠊            │
-│Idlest      5%          ⠑        ││Swap       5.2 GB                │
-└─────────────────────────────────┘└─────────────────────────────────┘
-┌────────── NETWORK ──────────────┐┌─────────── DISK ────────────────┐
-│In/sec   1.2 MB/s ▃▄▅▆▇█          ││Read/sec 273 KB/s ▃▄▅▆▇█         │
-│Out/sec  0.3 MB/s ███████  (in ↑) ││Write/sec   4 KB/s ███████       │
-│Total in   3.0 GB ▀▀▀▀▀▀▀  (out ↓)││Used        61 GB ███████        │
-└─────────────────────────────────┘└─────────────────────────────────┘
-```
+### Overview
+
+![Overview tab](public/image/s1.png)
+
+### Processes
+
+![Processes tab](public/image/s2.png)
 
 ## Features
 
@@ -98,6 +92,21 @@ pushes one value into each metric's ring buffer, and redraws.
 cargo test      # unit + render (TestBackend) tests
 cargo clippy    # lint
 ```
+
+## Roadmap
+
+More features are on the way:
+
+- **Per-core CPU** sparklines (one mini graph per core)
+- **Kill / signal** a selected process from the Processes tab
+- **Sortable** process table (by CPU, memory, name)
+- **GPU usage** and **temperature / fan** sensors
+- **Per-interface network** and **per-volume disk** breakdowns
+- **Configurable** refresh rate and color themes
+- **Alert thresholds** (highlight when CPU/memory cross a limit)
+- **CSV export / logging** of history
+
+Suggestions and PRs welcome.
 
 ## License
 
