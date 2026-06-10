@@ -80,20 +80,25 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 /// A smooth braille line graph on a fixed 0–100 scale (used for CPU/Memory).
-/// Right-anchored, and left-padded with zeros so the line always begins at the
-/// 0 baseline on the left edge — no empty gap before history fills.
+/// Left-anchored while history fills (with a single leading 0 so the line
+/// starts at the baseline), then right-anchored once the window is full.
 fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
     let block = graph_block(&metric.title);
     let inner = block.inner(area);
     let cols = inner.width.max(1) as f64;
 
-    // Exactly `cols + 1` points: newest at x = cols, older to the left, and
-    // zeros padding the left when we don't have a full window yet.
     let want = inner.width as usize + 1;
     let all = metric.primary();
-    let recent: Vec<f64> = all.iter().rev().take(want).rev().map(|&v| v as f64).collect();
-    let mut vis = vec![0.0; want.saturating_sub(recent.len())];
-    vis.extend(recent);
+    let vis: Vec<f64> = if all.len() >= want {
+        // Full window: newest at x = cols (far right).
+        all[all.len() - want..].iter().map(|&v| v as f64).collect()
+    } else {
+        // Still filling: one leading 0 so the first point rises from baseline,
+        // then the real samples grow left → right.
+        std::iter::once(0.0)
+            .chain(all.iter().map(|&v| v as f64))
+            .collect()
+    };
     let m = vis.len();
 
     let canvas = Canvas::default()
