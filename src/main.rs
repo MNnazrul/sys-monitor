@@ -66,15 +66,20 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 }
 
 fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
-    // Search input mode captures all typing.
+    // Search input mode captures typing, but still allows list scrolling.
     if app.searching {
         match code {
-            KeyCode::Esc => app.cancel_search(),   // clear filter + exit
+            KeyCode::Esc => app.cancel_search(),     // clear filter + exit
             KeyCode::Enter => app.searching = false, // keep filter, exit input
             KeyCode::Backspace => {
                 app.search.pop();
                 app.proc_scroll = 0;
             }
+            // Arrows/page keys scroll the filtered list while typing.
+            KeyCode::Up => app.scroll_procs(-1),
+            KeyCode::Down => app.scroll_procs(1),
+            KeyCode::PageUp => app.scroll_procs(-10),
+            KeyCode::PageDown => app.scroll_procs(10),
             KeyCode::Char(c) => {
                 app.search.push(c);
                 app.proc_scroll = 0;
