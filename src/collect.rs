@@ -11,8 +11,6 @@ pub struct ProcRow {
     pub mem: u64,
 }
 
-/// Top processes shown in the Processes tab.
-const PROC_ROWS: usize = 20;
 
 /// Saturating per-tick delta for cumulative counters.
 /// Returns 0 on first sample (prev=None) or on counter reset (cur < prev).
@@ -74,8 +72,9 @@ impl Collector {
                 mem: p.memory(),
             })
             .collect();
-        rows.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
-        rows.truncate(PROC_ROWS);
+        // Sort by PID so rows keep a stable position across ticks (values
+        // update in place instead of jumping around as CPU usage changes).
+        rows.sort_by_key(|r| r.pid);
         rows
     }
 

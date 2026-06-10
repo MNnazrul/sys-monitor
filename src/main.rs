@@ -79,6 +79,12 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
         KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
         KeyCode::Char(c @ '1'..='5') => app.select((c as u8 - b'0') as usize),
+        // Process-table scrolling.
+        KeyCode::Up | KeyCode::Char('k') => app.scroll_procs(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.scroll_procs(1),
+        KeyCode::PageUp => app.scroll_procs(-10),
+        KeyCode::PageDown => app.scroll_procs(10),
+        KeyCode::Home | KeyCode::Char('g') => app.scroll_top(),
         _ => {}
     }
 }

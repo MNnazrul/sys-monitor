@@ -40,6 +40,8 @@ pub struct App {
     /// Graph metrics, indexed by Tab order for CPU/Memory/Network/Disk only.
     pub metrics: [Metric; 4],
     pub procs: Vec<ProcRow>,
+    /// First visible row index in the Processes table.
+    pub proc_scroll: usize,
     pub collector: Collector,
     pub paused: bool,
     pub show_help: bool,
@@ -52,11 +54,22 @@ impl App {
             tab: Tab::Cpu,
             metrics: [Metric::new(), Metric::new(), Metric::new(), Metric::new()],
             procs: Vec::new(),
+            proc_scroll: 0,
             collector: Collector::new(),
             paused: false,
             show_help: false,
             should_quit: false,
         }
+    }
+
+    /// Move the process-table view by `delta` rows, clamped to the list.
+    pub fn scroll_procs(&mut self, delta: isize) {
+        let max = self.procs.len().saturating_sub(1) as isize;
+        self.proc_scroll = (self.proc_scroll as isize + delta).clamp(0, max) as usize;
+    }
+
+    pub fn scroll_top(&mut self) {
+        self.proc_scroll = 0;
     }
 
     pub fn next_tab(&mut self) {

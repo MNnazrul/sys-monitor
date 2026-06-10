@@ -51,7 +51,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_tabs(f, app, root[0]);
 
     if app.tab == Tab::Processes {
-        draw_processes(f, root[1], &app.procs);
+        draw_processes(f, root[1], &app.procs, app.proc_scroll);
     } else {
         draw_metric_panes(f, root[1], app);
     }
@@ -92,13 +92,19 @@ fn draw_metric_panes(f: &mut Frame, area: Rect, app: &App) {
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
 }
 
-/// Full-width process table sorted by CPU usage.
-fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow]) {
+/// Full-width process table (PID-ordered, stable). Scrolls via `scroll`.
+fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow], scroll: usize) {
+    let total = procs.len();
+    // Visible rows = inner height minus the border (2) and header (1).
+    let visible = area.height.saturating_sub(3) as usize;
+    let offset = scroll.min(total.saturating_sub(1));
+    let end = (offset + visible).min(total);
+    let shown = &procs[offset.min(total)..end];
+
     let header = Row::new(["PID", "NAME", "CPU %", "MEMORY"])
         .style(Style::default().fg(Color::Black).bg(GREEN).add_modifier(Modifier::BOLD));
 
-    let rows = procs.iter().map(|p| {
-        let cpu = format!("{:.1}", p.cpu);
+    let rows = shown.iter().map(|p| {
         let cpu_style = if p.cpu >= 50.0 {
             Style::default().fg(RED)
         } else if p.cpu >= 15.0 {
@@ -109,11 +115,17 @@ fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow]) {
         Row::new(vec![
             Cell::from(p.pid.to_string()),
             Cell::from(p.name.clone()),
-            Cell::from(cpu).style(cpu_style),
+            Cell::from(format!("{:.1}", p.cpu)).style(cpu_style),
             Cell::from(bytes(p.mem)),
         ])
     });
 
+    let title = format!(
+        "Processes — {}–{} of {}",
+        (offset + 1).min(total.max(1)),
+        end,
+        total
+    );
     let table = Table::new(
         rows,
         [
@@ -125,7 +137,7 @@ fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow]) {
     )
     .header(header)
     .column_spacing(2)
-    .block(graph_block("Processes — top by CPU"));
+    .block(graph_block(&title));
     f.render_widget(table, area);
 }
 
@@ -135,6 +147,8 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("Tab / → / l", "next tab"),
         ("Shift-Tab / ← / h", "previous tab"),
         ("1 – 5", "jump to tab"),
+        ("↑ ↓ / j k", "scroll processes"),
+        ("PgUp / PgDn", "scroll by page"),
         ("space", "pause / resume"),
         ("?", "toggle this help"),
         ("q / Esc", "quit"),
@@ -412,5 +426,33 @@ mod tests {
         assert!(text.contains("WindowServer"), "process name should render");
         assert!(text.contains("Keybindings"), "help overlay should render");
         assert!(text.contains("PAUSED"), "paused indicator should render");
+    }
+
+    #[test]
+    fn processes_scroll_windows_rows() {
+        let mut app = App::new();
+        app.tab = Tab::Processes;
+        app.procs = (0..50)
+            .map(|i| ProcRow {
+                pid: 100 + i,
+                name: format!("proc-{i}"),
+                cpu: 0.0,
+                mem: 1_000_000,
+            })
+            .collect();
+        app.proc_scroll = 5;
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        // Scrolled past the first rows; window starts at PID 105.
+        assert!(text.contains("proc-5"), "scrolled window should show proc-5");
+        assert!(!text.contains("proc-0 "), "first rows scrolled out of view");
+        assert!(text.contains("of 50"), "title should show total count");
     }
 }
