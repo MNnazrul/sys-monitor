@@ -80,8 +80,9 @@ pub fn draw(f: &mut Frame, app: &App) {
 }
 
 /// A smooth braille line graph on a fixed 0–100 scale (used for CPU/Memory).
-/// Left-anchored while history fills (with a single leading 0 so the line
-/// starts at the baseline), then right-anchored once the window is full.
+/// Right-anchored: newest sample at the far right. While history fills, the
+/// oldest real sample gets a single leading 0 so the line rises from the
+/// baseline; everything left of that stays empty (no flat zero line).
 fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
     let block = graph_block(&metric.title);
     let inner = block.inner(area);
@@ -89,17 +90,18 @@ fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
 
     let want = inner.width as usize + 1;
     let all = metric.primary();
-    let vis: Vec<f64> = if all.len() >= want {
-        // Full window: newest at x = cols (far right).
+    let vis: Vec<f64> = if all.len() + 1 >= want {
+        // Full window: real samples span the whole width.
         all[all.len() - want..].iter().map(|&v| v as f64).collect()
     } else {
-        // Still filling: one leading 0 so the first point rises from baseline,
-        // then the real samples grow left → right.
+        // Still filling: one leading 0 then the real samples, right-anchored.
         std::iter::once(0.0)
             .chain(all.iter().map(|&v| v as f64))
             .collect()
     };
     let m = vis.len();
+    // Right-anchor: newest (i = m-1) at x = cols, older samples to the left.
+    let base = cols - (m.saturating_sub(1)) as f64;
 
     let canvas = Canvas::default()
         .block(block)
@@ -107,12 +109,11 @@ fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
         .x_bounds([0.0, cols])
         .y_bounds([0.0, 100.0])
         .paint(move |ctx| {
-            for i in 0..m - 1 {
-                // i maps directly to x since m == cols + 1.
+            for i in 0..m.saturating_sub(1) {
                 ctx.draw(&CanvasLine {
-                    x1: i as f64,
+                    x1: base + i as f64,
                     y1: vis[i],
-                    x2: (i + 1) as f64,
+                    x2: base + (i + 1) as f64,
                     y2: vis[i + 1],
                     color,
                 });
