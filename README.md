@@ -101,4 +101,4 @@ cargo clippy    # lint
 
 ## License
 
-Not set yet — add a `LICENSE` file (e.g. MIT) before publishing.
+[MIT](LICENSE) © 2026 Nazrul Islam
