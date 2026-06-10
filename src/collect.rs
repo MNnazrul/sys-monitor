@@ -68,19 +68,23 @@ impl Collector {
         self.sys.refresh_memory();
         let total = self.sys.total_memory().max(1);
         let used = self.sys.used_memory();
-        let free = total.saturating_sub(used);
         let pct = used as f64 / total as f64 * 100.0;
-        m.update(
-            pct.round() as u64,
-            None,
-            "MEMORY",
-            vec![
-                ("Physical".into(), format!("{:.1} GB", total as f64 / GB)),
-                ("Used".into(), format!("{:.1} GB", used as f64 / GB)),
-                ("Free".into(), format!("{:.1} GB", free as f64 / GB)),
-                ("Pressure".into(), format!("{pct:.0}%")),
-            ],
-        );
+        let swap = self.sys.used_swap();
+
+        // Left column: physical/used/cached/swap. Right: app/wired/compressed/pressure.
+        let mut stats = vec![
+            ("Physical".into(), gb(total)),
+            ("Used".into(), gb(used)),
+        ];
+        let extra = mac_mem();
+        stats.push(("Cached Files".into(), extra.map(|e| gb(e.cached)).unwrap_or_else(|| "—".into())));
+        stats.push(("Swap Used".into(), gb(swap)));
+        stats.push(("App Memory".into(), extra.map(|e| gb(e.app)).unwrap_or_else(|| "—".into())));
+        stats.push(("Wired".into(), extra.map(|e| gb(e.wired)).unwrap_or_else(|| "—".into())));
+        stats.push(("Compressed".into(), extra.map(|e| gb(e.compressed)).unwrap_or_else(|| "—".into())));
+        stats.push(("Pressure".into(), format!("{pct:.0}%")));
+
+        m.update(pct.round() as u64, None, "MEMORY", stats);
     }
 
     fn sample_net(&mut self, m: &mut Metric) {
@@ -172,6 +176,64 @@ impl Collector {
     }
 }
 
+/// Format bytes as gibibytes, e.g. "13.9 GB".
+fn gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / GB)
+}
+
+/// macOS memory breakdown derived from `vm_stat`, in bytes.
+#[derive(Clone, Copy)]
+struct MacMem {
+    app: u64,
+    wired: u64,
+    compressed: u64,
+    cached: u64,
+}
+
+/// Parse `vm_stat` for the Activity-Monitor-style breakdown. macOS only;
+/// returns None on any other platform or if the command/parse fails.
+#[cfg(target_os = "macos")]
+fn mac_mem() -> Option<MacMem> {
+    let out = std::process::Command::new("vm_stat").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    // Header: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+    let page: u64 = text
+        .lines()
+        .next()
+        .and_then(|l| l.split("page size of ").nth(1))
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(4096);
+
+    let field = |label: &str| -> u64 {
+        text.lines()
+            .find_map(|l| l.strip_prefix(label))
+            .map(|v| v.trim().trim_end_matches('.').trim())
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0)
+            * page
+    };
+
+    let wired = field("Pages wired down:");
+    let compressed = field("Pages occupied by compressor:");
+    let purgeable = field("Pages purgeable:");
+    let file_backed = field("File-backed pages:");
+    let anonymous = field("Anonymous pages:");
+
+    Some(MacMem {
+        app: anonymous.saturating_sub(purgeable),
+        wired,
+        compressed,
+        cached: file_backed + purgeable,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_mem() -> Option<MacMem> {
+    None
+}
+
 /// Human-readable bytes (B/KB/MB/GB).
 fn human(bytes: u64) -> String {
     const U: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -187,6 +249,13 @@ fn human(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::delta;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_mem_returns_values() {
+        let e = super::mac_mem().expect("vm_stat available on macOS");
+        assert!(e.wired > 0 && e.compressed > 0, "wired/compressed should be non-zero");
+    }
 
     #[test]
     fn first_sample_is_zero() {
