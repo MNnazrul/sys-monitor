@@ -1,4 +1,4 @@
-//! Three-pane per-tab layout: stats │ filled graph │ stats, plus a tab bar.
+//! Rendering: tab bar, the Overview 2×2 graph grid, and the Processes table.
 use crate::app::{App, Tab};
 use crate::graph::Graph;
 use crate::metric::Metric;
@@ -14,23 +14,10 @@ use ratatui::{
     },
 };
 
-const SIDE_WIDTH: u16 = 24;
-
 const GREEN: Color = Color::Rgb(120, 200, 130);
 const YELLOW: Color = Color::Rgb(232, 174, 54);
 const RED: Color = Color::Rgb(224, 93, 70);
 const BLUE: Color = Color::Rgb(74, 144, 226);
-
-/// Activity-Monitor-ish palette per tab: (up/primary, down/secondary).
-fn colors(tab: Tab) -> (Color, Color) {
-    match tab {
-        Tab::Cpu => (GREEN, GREEN),
-        Tab::Memory => (GREEN, GREEN), // overridden by pressure_color() at draw time
-        Tab::Network => (BLUE, RED),
-        Tab::Disk => (BLUE, RED),
-        Tab::Processes => (GREEN, GREEN),
-    }
-}
 
 /// Memory pressure color, like Activity Monitor: green (fine) → yellow → red.
 fn pressure_color(used_pct: u64) -> Color {
@@ -49,10 +36,9 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_tabs(f, app, root[0]);
 
-    if app.tab == Tab::Processes {
-        draw_processes(f, root[1], app);
-    } else {
-        draw_metric_panes(f, root[1], app);
+    match app.tab {
+        Tab::Overview => draw_overview(f, root[1], app),
+        Tab::Processes => draw_processes(f, root[1], app),
     }
 
     if app.show_help {
@@ -60,35 +46,55 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-/// CPU/Memory/Network/Disk: stats │ graph │ stats.
-fn draw_metric_panes(f: &mut Frame, area: Rect, app: &App) {
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(SIDE_WIDTH),
-            Constraint::Min(20),
-            Constraint::Length(SIDE_WIDTH),
-        ])
-        .split(area);
-
-    let metric = app.active_metric();
-    let (up, down) = if app.tab == Tab::Memory {
-        let used = metric.primary().last().copied().unwrap_or(0);
-        let c = pressure_color(used);
-        (c, c)
-    } else {
-        colors(app.tab)
-    };
-    let half = metric.stats.len().div_ceil(2);
-
-    draw_stats(f, panes[0], &metric.stats[..half.min(metric.stats.len())]);
-    match app.tab {
-        // Percentages: smooth line on a fixed 0–100 scale.
-        Tab::Cpu | Tab::Memory => draw_line_graph(f, panes[1], metric, up),
-        // Rates: filled area, auto-scaled to peak.
-        _ => draw_graph(f, panes[1], metric, up, down, None),
+/// CPU + Memory + Network + Disk in a 2×2 grid, each a titled mini graph.
+/// metrics order: 0 = CPU, 1 = Memory, 2 = Network, 3 = Disk.
+fn draw_overview(f: &mut Frame, area: Rect, app: &App) {
+    let rows = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+    let top = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
+    let bot = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[1]);
+    let cells = [top[0], top[1], bot[0], bot[1]];
+    for (i, cell) in cells.into_iter().enumerate() {
+        draw_mini(f, cell, &app.metrics[i], i);
     }
-    draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
+}
+
+/// One cell of the overview grid: bordered block titled "<NAME>  <value>" with
+/// the graph inside. CPU/Memory render as lines; Network/Disk as filled areas.
+fn draw_mini(f: &mut Frame, area: Rect, metric: &Metric, idx: usize) {
+    // Headline value pulled from the most relevant stat for this metric.
+    let key = match idx {
+        0 => "Usage",
+        1 => "Pressure",
+        2 => "In/sec",
+        _ => "Read/sec",
+    };
+    let head = metric
+        .stats
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+
+    let mem_color = pressure_color(metric.primary().last().copied().unwrap_or(0));
+    let accent = match idx {
+        0 => GREEN,
+        1 => mem_color,
+        _ => BLUE,
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {}  {} ", metric.title, head))
+        .title_alignment(Alignment::Center)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    match idx {
+        0 => line_into(f, inner, &metric.primary(), GREEN),
+        1 => line_into(f, inner, &metric.primary(), mem_color),
+        _ => area_into(f, inner, metric, accent, RED),
+    }
 }
 
 /// Full-width process table (PID-ordered, stable) with optional search box.
@@ -182,7 +188,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
     let lines = [
         ("Tab / → / l", "next tab"),
         ("Shift-Tab / ← / h", "previous tab"),
-        ("1 – 5", "jump to tab"),
+        ("1 – 2", "jump to tab"),
         ("↑ ↓ / j k", "scroll processes"),
         ("PgUp / PgDn", "scroll by page"),
         ("/", "search processes (name/PID)"),
@@ -242,32 +248,24 @@ fn bytes(n: u64) -> String {
     format!("{:.1} {}", v, U[i])
 }
 
-/// A smooth braille line graph on a fixed 0–100 scale (used for CPU/Memory).
-/// Right-anchored: newest sample at the far right. While history fills, the
-/// oldest real sample gets a single leading 0 so the line rises from the
-/// baseline; everything left of that stays empty (no flat zero line).
-fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
-    let block = graph_block(&metric.title);
-    let inner = block.inner(area);
+/// A smooth braille line graph on a fixed 0–100 scale (CPU/Memory), drawn into
+/// `inner` (no surrounding block). Right-anchored: newest sample at the far
+/// right. While history fills, the oldest real sample gets a single leading 0
+/// so the line rises from the baseline; left of that stays empty.
+fn line_into(f: &mut Frame, inner: Rect, data: &[u64], color: Color) {
     let cols = inner.width.max(1) as f64;
-
     let want = inner.width as usize + 1;
-    let all = metric.primary();
-    let vis: Vec<f64> = if all.len() + 1 >= want {
-        // Full window: real samples span the whole width.
-        all[all.len() - want..].iter().map(|&v| v as f64).collect()
+    let vis: Vec<f64> = if data.len() + 1 >= want {
+        data[data.len() - want..].iter().map(|&v| v as f64).collect()
     } else {
-        // Still filling: one leading 0 then the real samples, right-anchored.
         std::iter::once(0.0)
-            .chain(all.iter().map(|&v| v as f64))
+            .chain(data.iter().map(|&v| v as f64))
             .collect()
     };
     let m = vis.len();
-    // Right-anchor: newest (i = m-1) at x = cols, older samples to the left.
     let base = cols - (m.saturating_sub(1)) as f64;
 
     let canvas = Canvas::default()
-        .block(block)
         .marker(Marker::Braille)
         .x_bounds([0.0, cols])
         .y_bounds([0.0, 100.0])
@@ -282,7 +280,7 @@ fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
                 });
             }
         });
-    f.render_widget(canvas, area);
+    f.render_widget(canvas, inner);
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -310,7 +308,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(
             Style::default()
                 .fg(Color::Black)
-                .bg(colors(app.tab).0)
+                .bg(GREEN)
                 .add_modifier(Modifier::BOLD),
         )
         .style(Style::default().fg(Color::Gray));
@@ -326,11 +324,9 @@ fn graph_block(title: &str) -> Block<'static> {
         .border_style(Style::default().fg(Color::DarkGray))
 }
 
-fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color, scale: Option<u64>) {
-    let block = graph_block(&metric.title);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
+/// A filled-area graph (auto-scaled) drawn into `inner` (no surrounding block).
+/// Dual-series metrics mirror about a baseline (in/read up, out/write down).
+fn area_into(f: &mut Frame, inner: Rect, metric: &Metric, up: Color, down: Color) {
     let primary = metric.primary();
     let secondary = metric.secondary();
     let graph = Graph {
@@ -342,35 +338,9 @@ fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color
         },
         up_color: up,
         down_color: down,
-        scale,
+        scale: None,
     };
     f.render_widget(graph, inner);
-}
-
-fn draw_stats(f: &mut Frame, area: Rect, stats: &[(String, String)]) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let width = inner.width as usize;
-    let label_style = Style::default().fg(Color::Gray);
-    let value_style = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
-
-    let mut lines: Vec<Line> = vec![Line::from("")]; // top breathing room
-    for (k, v) in stats {
-        let pad = width.saturating_sub(k.len() + v.len()).max(1);
-        lines.push(Line::from(vec![
-            Span::styled(k.clone(), label_style),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(v.clone(), value_style),
-        ]));
-        lines.push(Line::from(""));
-    }
-    f.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
@@ -391,55 +361,36 @@ mod tests {
     }
 
     #[test]
-    fn renders_without_panic_and_fills() {
+    fn overview_renders_lines_and_fills() {
         let mut app = App::new();
-        app.tab = Tab::Network;
-        // A few samples; filled graph must right-anchor (newest at far right).
-        for (rx, tx) in [(10u64, 5u64), (30, 15), (50, 25), (70, 35), (90, 45)] {
-            app.metrics[2].update(rx, Some(tx), "NETWORK", vec![("In".into(), format!("{rx}"))]);
-        }
-        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
-        term.draw(|f| draw(f, &app)).unwrap();
-        let buf = term.backend().buffer();
-
-        // Collect the x of every filled block cell (up and down glyphs).
-        let fill = "▁▂▃▄▅▆▇█▀";
-        let mut xs: Vec<u16> = vec![];
-        for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
-                if fill.contains(buf.cell((x, y)).unwrap().symbol()) {
-                    xs.push(x);
-                }
-            }
-        }
-        assert!(!xs.is_empty(), "graph should render filled block glyphs");
-
-        // Graph pane inner right edge with width 100 = col 74. Right-anchored:
-        // 5 samples occupy only the ~5 rightmost columns, nothing further left.
-        let max_x = *xs.iter().max().unwrap();
-        let min_x = *xs.iter().min().unwrap();
-        assert!(max_x >= 73, "newest sample should sit at the far right (got {max_x})");
-        assert!(min_x >= 69, "only the last few columns filled (got {min_x})");
-    }
-
-    #[test]
-    fn memory_renders_braille_line() {
-        let mut app = App::new();
-        app.tab = Tab::Memory;
+        app.tab = Tab::Overview;
         for i in 0..200u64 {
-            let v = (60.0 + (i as f64 * 0.15).sin() * 18.0) as u64;
-            app.metrics[1].update(v, None, "MEMORY", vec![("Pressure".into(), format!("{v}%"))]);
+            let cpu = (50.0 + (i as f64 * 0.2).sin() * 40.0) as u64;
+            let mem = (60.0 + (i as f64 * 0.15).sin() * 18.0) as u64;
+            app.metrics[0].update(cpu, None, "CPU", vec![("Usage".into(), format!("{cpu}%"))]);
+            app.metrics[1].update(mem, None, "MEMORY", vec![("Pressure".into(), format!("{mem}%"))]);
+            app.metrics[2].update(1000 + i, Some(500 + i), "NETWORK", vec![("In/sec".into(), "x".into())]);
+            app.metrics[3].update(800 + i, Some(200 + i), "DISK", vec![("Read/sec".into(), "y".into())]);
         }
-        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
         term.draw(|f| draw(f, &app)).unwrap();
-        let buf = term.backend().buffer();
+        let content: Vec<_> = term.backend().buffer().content().to_vec();
 
-        // Canvas line uses braille glyphs (U+2800..U+28FF).
-        let drew_line = buf
-            .content()
+        // CPU/Memory render braille lines.
+        let braille = content
             .iter()
             .any(|c| c.symbol().chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)));
-        assert!(drew_line, "memory tab should render a braille line");
+        // Network/Disk render filled block glyphs.
+        let fill = "▁▂▃▄▅▆▇█▀";
+        let filled = content.iter().any(|c| fill.contains(c.symbol()));
+        assert!(braille, "overview should show braille lines for CPU/Memory");
+        assert!(filled, "overview should show filled areas for Network/Disk");
+
+        // All four titles present.
+        let text: String = content.iter().map(|c| c.symbol()).collect();
+        for t in ["CPU", "MEMORY", "NETWORK", "DISK"] {
+            assert!(text.contains(t), "overview should label {t}");
+        }
     }
 
     #[test]

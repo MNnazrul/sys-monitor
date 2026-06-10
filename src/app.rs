@@ -4,28 +4,17 @@ use crate::metric::Metric;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
-    Cpu,
-    Memory,
-    Network,
-    Disk,
+    /// CPU + Memory + Network + Disk together in a 2×2 grid.
+    Overview,
     Processes,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
-        Tab::Cpu,
-        Tab::Memory,
-        Tab::Network,
-        Tab::Disk,
-        Tab::Processes,
-    ];
+    pub const ALL: [Tab; 2] = [Tab::Overview, Tab::Processes];
 
     pub fn title(self) -> &'static str {
         match self {
-            Tab::Cpu => "CPU",
-            Tab::Memory => "Memory",
-            Tab::Network => "Network",
-            Tab::Disk => "Disk",
+            Tab::Overview => "Overview",
             Tab::Processes => "Processes",
         }
     }
@@ -55,7 +44,7 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            tab: Tab::Cpu,
+            tab: Tab::Overview,
             metrics: [Metric::new(), Metric::new(), Metric::new(), Metric::new()],
             procs: Vec::new(),
             proc_scroll: 0,
@@ -131,11 +120,6 @@ impl App {
         self.collector.sample(&mut self.metrics);
         self.procs = self.collector.sample_procs();
     }
-
-    /// Graph metric for the active tab. Only valid for graph tabs (not Processes).
-    pub fn active_metric(&self) -> &Metric {
-        &self.metrics[self.tab.index()]
-    }
 }
 
 #[cfg(test)]
@@ -146,14 +130,14 @@ mod tests {
     fn next_wraps() {
         assert_eq!(
             Tab::ALL[(Tab::Processes.index() + 1) % Tab::ALL.len()],
-            Tab::Cpu
+            Tab::Overview
         );
     }
 
     #[test]
     fn prev_wraps() {
         assert_eq!(
-            Tab::ALL[(Tab::Cpu.index() + Tab::ALL.len() - 1) % Tab::ALL.len()],
+            Tab::ALL[(Tab::Overview.index() + Tab::ALL.len() - 1) % Tab::ALL.len()],
             Tab::Processes
         );
     }
