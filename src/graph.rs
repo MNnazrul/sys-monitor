@@ -20,6 +20,9 @@ pub struct Graph<'a> {
     pub secondary: Option<&'a [u64]>,
     pub up_color: Color,
     pub down_color: Color,
+    /// Fixed top-of-scale (e.g. 100 for percentages). `None` = auto-scale to
+    /// the largest visible sample (right for unbounded rates like bytes/s).
+    pub scale: Option<u64>,
 }
 
 impl<'a> Widget for Graph<'a> {
@@ -35,13 +38,16 @@ impl<'a> Widget for Graph<'a> {
         let p = last(self.primary);
         let s = self.secondary.map(last);
 
-        // Shared scale across both visible series so proportions match.
-        let max = p
-            .iter()
-            .chain(s.unwrap_or(&[]).iter())
-            .copied()
-            .max()
-            .unwrap_or(0)
+        // Fixed scale if given, else shared auto-scale across both series.
+        let max = self
+            .scale
+            .unwrap_or_else(|| {
+                p.iter()
+                    .chain(s.unwrap_or(&[]).iter())
+                    .copied()
+                    .max()
+                    .unwrap_or(0)
+            })
             .max(1);
 
         let right = area.right();

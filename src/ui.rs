@@ -12,14 +12,29 @@ use ratatui::{
 
 const SIDE_WIDTH: u16 = 24;
 
+const GREEN: Color = Color::Rgb(120, 200, 130);
+const YELLOW: Color = Color::Rgb(232, 174, 54);
+const RED: Color = Color::Rgb(224, 93, 70);
+const BLUE: Color = Color::Rgb(74, 144, 226);
+const CYAN: Color = Color::Rgb(90, 200, 210);
+
 /// Activity-Monitor-ish palette per tab: (up/primary, down/secondary).
 fn colors(tab: Tab) -> (Color, Color) {
     match tab {
-        Tab::Cpu => (Color::Rgb(110, 200, 120), Color::Rgb(110, 200, 120)),
-        Tab::Memory => (Color::Rgb(232, 174, 54), Color::Rgb(232, 174, 54)),
-        Tab::Network => (Color::Rgb(74, 144, 226), Color::Rgb(224, 93, 70)),
-        Tab::Disk => (Color::Rgb(74, 144, 226), Color::Rgb(224, 93, 70)),
-        Tab::Energy => (Color::Rgb(90, 200, 210), Color::Rgb(90, 200, 210)),
+        Tab::Cpu => (GREEN, GREEN),
+        Tab::Memory => (GREEN, GREEN), // overridden by pressure_color() at draw time
+        Tab::Network => (BLUE, RED),
+        Tab::Disk => (BLUE, RED),
+        Tab::Energy => (CYAN, CYAN),
+    }
+}
+
+/// Memory pressure color, like Activity Monitor: green (fine) → yellow → red.
+fn pressure_color(used_pct: u64) -> Color {
+    match used_pct {
+        0..=69 => GREEN,
+        70..=84 => YELLOW,
+        _ => RED,
     }
 }
 
@@ -41,11 +56,23 @@ pub fn draw(f: &mut Frame, app: &App) {
         .split(root[1]);
 
     let metric = app.active_metric();
-    let (up, down) = colors(app.tab);
+    let (up, down) = if app.tab == Tab::Memory {
+        let used = metric.primary().last().copied().unwrap_or(0);
+        let c = pressure_color(used);
+        (c, c)
+    } else {
+        colors(app.tab)
+    };
     let half = metric.stats.len().div_ceil(2);
 
+    // Percentages get a fixed 0–100 scale; rates auto-scale to their peak.
+    let scale = match app.tab {
+        Tab::Cpu | Tab::Memory => Some(100),
+        _ => None,
+    };
+
     draw_stats(f, panes[0], &metric.stats[..half.min(metric.stats.len())]);
-    draw_graph(f, panes[1], metric, up, down);
+    draw_graph(f, panes[1], metric, up, down, scale);
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
 }
 
@@ -71,7 +98,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tabs, area);
 }
 
-fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color) {
+fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color, scale: Option<u64>) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", metric.title))
@@ -91,6 +118,7 @@ fn draw_graph(f: &mut Frame, area: Rect, metric: &Metric, up: Color, down: Color
         },
         up_color: up,
         down_color: down,
+        scale,
     };
     f.render_widget(graph, inner);
 }
@@ -126,6 +154,16 @@ mod tests {
     use super::*;
     use crate::app::App;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn pressure_color_thresholds() {
+        assert_eq!(pressure_color(40), GREEN);
+        assert_eq!(pressure_color(69), GREEN);
+        assert_eq!(pressure_color(70), YELLOW);
+        assert_eq!(pressure_color(84), YELLOW);
+        assert_eq!(pressure_color(85), RED);
+        assert_eq!(pressure_color(100), RED);
+    }
 
     #[test]
     fn renders_without_panic_and_fills() {
