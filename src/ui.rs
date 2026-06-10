@@ -20,7 +20,6 @@ const GREEN: Color = Color::Rgb(120, 200, 130);
 const YELLOW: Color = Color::Rgb(232, 174, 54);
 const RED: Color = Color::Rgb(224, 93, 70);
 const BLUE: Color = Color::Rgb(74, 144, 226);
-const CYAN: Color = Color::Rgb(90, 200, 210);
 
 /// Activity-Monitor-ish palette per tab: (up/primary, down/secondary).
 fn colors(tab: Tab) -> (Color, Color) {
@@ -29,7 +28,6 @@ fn colors(tab: Tab) -> (Color, Color) {
         Tab::Memory => (GREEN, GREEN), // overridden by pressure_color() at draw time
         Tab::Network => (BLUE, RED),
         Tab::Disk => (BLUE, RED),
-        Tab::Energy => (CYAN, CYAN),
     }
 }
 

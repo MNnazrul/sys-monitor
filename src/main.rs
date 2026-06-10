@@ -71,7 +71,7 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.should_quit = true,
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
         KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
-        KeyCode::Char(c @ '1'..='5') => app.select((c as u8 - b'0') as usize),
+        KeyCode::Char(c @ '1'..='4') => app.select((c as u8 - b'0') as usize),
         _ => {}
     }
 }

@@ -22,7 +22,6 @@ pub struct Collector {
     sys: System,
     nets: Networks,
     disks: Disks,
-    battery: Option<battery::Manager>,
 }
 
 impl Collector {
@@ -31,18 +30,16 @@ impl Collector {
             sys: System::new_all(),
             nets: Networks::new_with_refreshed_list(),
             disks: Disks::new_with_refreshed_list(),
-            battery: battery::Manager::new().ok(),
         }
     }
 
     /// Refresh OS state and push one sample into each metric.
-    /// Order: [cpu, mem, net, disk, energy].
-    pub fn sample(&mut self, metrics: &mut [Metric; 5]) {
+    /// Order: [cpu, mem, net, disk].
+    pub fn sample(&mut self, metrics: &mut [Metric; 4]) {
         self.sample_cpu(&mut metrics[0]);
         self.sample_mem(&mut metrics[1]);
         self.sample_net(&mut metrics[2]);
         self.sample_disk(&mut metrics[3]);
-        self.sample_energy(&mut metrics[4]);
     }
 
     fn sample_cpu(&mut self, m: &mut Metric) {
@@ -132,48 +129,6 @@ impl Collector {
         );
     }
 
-    fn sample_energy(&mut self, m: &mut Metric) {
-        let none = |m: &mut Metric, label: &str| {
-            m.update(
-                0,
-                None,
-                "ENERGY",
-                vec![("Status".into(), label.to_string())],
-            );
-        };
-        let Some(mgr) = &self.battery else {
-            return none(m, "no battery");
-        };
-        let Ok(batteries) = mgr.batteries() else {
-            return none(m, "no battery");
-        };
-        let Some(Ok(bat)) = batteries.into_iter().next() else {
-            return none(m, "no battery");
-        };
-
-        use battery::units::{power::watt, ratio::percent, time::minute};
-        let watts = bat.energy_rate().get::<watt>();
-        let charge = bat.state_of_charge().get::<percent>();
-        let state = format!("{:?}", bat.state()).to_lowercase();
-        let time = bat
-            .time_to_empty()
-            .map(|t| {
-                let mins = t.get::<minute>() as u64;
-                format!("{}h{:02}m", mins / 60, mins % 60)
-            })
-            .unwrap_or_else(|| "—".into());
-        m.update(
-            (watts * 1000.0).round() as u64,
-            None,
-            "ENERGY",
-            vec![
-                ("Power".into(), format!("{watts:.1} W")),
-                ("Charge".into(), format!("{charge:.0}%")),
-                ("State".into(), state),
-                ("Time left".into(), time),
-            ],
-        );
-    }
 }
 
 /// Format bytes as gibibytes, e.g. "13.9 GB".

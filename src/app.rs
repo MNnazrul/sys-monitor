@@ -1,4 +1,4 @@
-//! Application state: which tab is active, the five metrics, quit flag.
+//! Application state: which tab is active, the four metrics, quit flag.
 use crate::collect::Collector;
 use crate::metric::Metric;
 
@@ -8,11 +8,10 @@ pub enum Tab {
     Memory,
     Network,
     Disk,
-    Energy,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [Tab::Cpu, Tab::Memory, Tab::Network, Tab::Disk, Tab::Energy];
+    pub const ALL: [Tab; 4] = [Tab::Cpu, Tab::Memory, Tab::Network, Tab::Disk];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -20,7 +19,6 @@ impl Tab {
             Tab::Memory => "Memory",
             Tab::Network => "Network",
             Tab::Disk => "Disk",
-            Tab::Energy => "Energy",
         }
     }
 
@@ -31,7 +29,7 @@ impl Tab {
 
 pub struct App {
     pub tab: Tab,
-    pub metrics: [Metric; 5],
+    pub metrics: [Metric; 4],
     pub collector: Collector,
     pub should_quit: bool,
 }
@@ -40,13 +38,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             tab: Tab::Cpu,
-            metrics: [
-                Metric::new(),
-                Metric::new(),
-                Metric::new(),
-                Metric::new(),
-                Metric::new(),
-            ],
+            metrics: [Metric::new(), Metric::new(), Metric::new(), Metric::new()],
             collector: Collector::new(),
             should_quit: false,
         }
@@ -84,12 +76,15 @@ mod tests {
 
     #[test]
     fn next_wraps() {
-        assert_eq!(Tab::ALL[(Tab::Energy.index() + 1) % 5], Tab::Cpu);
+        assert_eq!(Tab::ALL[(Tab::Disk.index() + 1) % Tab::ALL.len()], Tab::Cpu);
     }
 
     #[test]
     fn prev_wraps() {
-        assert_eq!(Tab::ALL[(Tab::Cpu.index() + 4) % 5], Tab::Energy);
+        assert_eq!(
+            Tab::ALL[(Tab::Cpu.index() + Tab::ALL.len() - 1) % Tab::ALL.len()],
+            Tab::Disk
+        );
     }
 
     #[test]
