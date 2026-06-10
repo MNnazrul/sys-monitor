@@ -1,6 +1,18 @@
-//! Owns the OS handles and samples all five metrics each tick.
+//! Owns the OS handles and samples all metrics each tick.
 use crate::metric::Metric;
-use sysinfo::{Disks, Networks, System};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+
+/// One row in the process table: pid, name, CPU%, resident memory bytes.
+#[derive(Clone)]
+pub struct ProcRow {
+    pub pid: u32,
+    pub name: String,
+    pub cpu: f32,
+    pub mem: u64,
+}
+
+/// Top processes shown in the Processes tab.
+const PROC_ROWS: usize = 20;
 
 /// Saturating per-tick delta for cumulative counters.
 /// Returns 0 on first sample (prev=None) or on counter reset (cur < prev).
@@ -40,6 +52,31 @@ impl Collector {
         self.sample_mem(&mut metrics[1]);
         self.sample_net(&mut metrics[2]);
         self.sample_disk(&mut metrics[3]);
+    }
+
+    /// Refresh processes and return the top rows by CPU usage.
+    pub fn sample_procs(&mut self) -> Vec<ProcRow> {
+        self.sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+        let ncpu = self.sys.cpus().len().max(1) as f32;
+        let mut rows: Vec<ProcRow> = self
+            .sys
+            .processes()
+            .iter()
+            .map(|(pid, p)| ProcRow {
+                pid: pid.as_u32(),
+                name: p.name().to_string_lossy().into_owned(),
+                // sysinfo reports cpu summed across cores; normalize to 0–100.
+                cpu: p.cpu_usage() / ncpu,
+                mem: p.memory(),
+            })
+            .collect();
+        rows.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+        rows.truncate(PROC_ROWS);
+        rows
     }
 
     fn sample_cpu(&mut self, m: &mut Metric) {

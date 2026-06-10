@@ -1,15 +1,16 @@
 //! Three-pane per-tab layout: stats │ filled graph │ stats, plus a tab bar.
 use crate::app::{App, Tab};
+use crate::collect::ProcRow;
 use crate::graph::Graph;
 use crate::metric::Metric;
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Block, Borders, Paragraph, Tabs,
+        Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs,
         canvas::{Canvas, Line as CanvasLine},
     },
 };
@@ -28,6 +29,7 @@ fn colors(tab: Tab) -> (Color, Color) {
         Tab::Memory => (GREEN, GREEN), // overridden by pressure_color() at draw time
         Tab::Network => (BLUE, RED),
         Tab::Disk => (BLUE, RED),
+        Tab::Processes => (GREEN, GREEN),
     }
 }
 
@@ -48,6 +50,19 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_tabs(f, app, root[0]);
 
+    if app.tab == Tab::Processes {
+        draw_processes(f, root[1], &app.procs);
+    } else {
+        draw_metric_panes(f, root[1], app);
+    }
+
+    if app.show_help {
+        draw_help(f, f.area());
+    }
+}
+
+/// CPU/Memory/Network/Disk: stats │ graph │ stats.
+fn draw_metric_panes(f: &mut Frame, area: Rect, app: &App) {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -55,7 +70,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             Constraint::Min(20),
             Constraint::Length(SIDE_WIDTH),
         ])
-        .split(root[1]);
+        .split(area);
 
     let metric = app.active_metric();
     let (up, down) = if app.tab == Tab::Memory {
@@ -75,6 +90,105 @@ pub fn draw(f: &mut Frame, app: &App) {
         _ => draw_graph(f, panes[1], metric, up, down, None),
     }
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
+}
+
+/// Full-width process table sorted by CPU usage.
+fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow]) {
+    let header = Row::new(["PID", "NAME", "CPU %", "MEMORY"])
+        .style(Style::default().fg(Color::Black).bg(GREEN).add_modifier(Modifier::BOLD));
+
+    let rows = procs.iter().map(|p| {
+        let cpu = format!("{:.1}", p.cpu);
+        let cpu_style = if p.cpu >= 50.0 {
+            Style::default().fg(RED)
+        } else if p.cpu >= 15.0 {
+            Style::default().fg(YELLOW)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        Row::new(vec![
+            Cell::from(p.pid.to_string()),
+            Cell::from(p.name.clone()),
+            Cell::from(cpu).style(cpu_style),
+            Cell::from(bytes(p.mem)),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(8),
+            Constraint::Min(20),
+            Constraint::Length(8),
+            Constraint::Length(12),
+        ],
+    )
+    .header(header)
+    .column_spacing(2)
+    .block(graph_block("Processes — top by CPU"));
+    f.render_widget(table, area);
+}
+
+/// Centered help popup listing keybindings.
+fn draw_help(f: &mut Frame, area: Rect) {
+    let lines = [
+        ("Tab / → / l", "next tab"),
+        ("Shift-Tab / ← / h", "previous tab"),
+        ("1 – 5", "jump to tab"),
+        ("space", "pause / resume"),
+        ("?", "toggle this help"),
+        ("q / Esc", "quit"),
+    ];
+    let text: Vec<Line> = std::iter::once(Line::from(""))
+        .chain(lines.iter().map(|(k, v)| {
+            Line::from(vec![
+                Span::styled(format!("  {k:<20}"), Style::default().fg(GREEN).add_modifier(Modifier::BOLD)),
+                Span::styled((*v).to_string(), Style::default().fg(Color::White)),
+            ])
+        }))
+        .collect();
+
+    let w = 44.min(area.width);
+    let h = (text.len() as u16 + 2).min(area.height);
+    let popup = center(area, w, h);
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keybindings ")
+        .title_alignment(Alignment::Center)
+        .border_style(Style::default().fg(GREEN));
+    f.render_widget(Paragraph::new(text).block(block), popup);
+}
+
+/// A `w × h` rect centered within `area`.
+fn center(area: Rect, w: u16, h: u16) -> Rect {
+    let [_, mid, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(h),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(area);
+    let [_, rect, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(w),
+        Constraint::Fill(1),
+    ])
+    .flex(Flex::Center)
+    .areas(mid);
+    rect
+}
+
+/// Human-readable bytes for the process table.
+fn bytes(n: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{:.1} {}", v, U[i])
 }
 
 /// A smooth braille line graph on a fixed 0–100 scale (used for CPU/Memory).
@@ -122,13 +236,23 @@ fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let titles: Vec<Line> = Tab::ALL.iter().map(|t| Line::from(t.title())).collect();
+    let title = if app.paused {
+        " sys-monitor  [PAUSED] "
+    } else {
+        " sys-monitor "
+    };
     let tabs = Tabs::new(titles)
         .select(app.tab.index())
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" sys-monitor ")
-                .title_alignment(Alignment::Center),
+                .title(title)
+                .title_alignment(Alignment::Center)
+                .title_style(if app.paused {
+                    Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                }),
         )
         .divider("│")
         .padding(" ", " ")
@@ -264,5 +388,29 @@ mod tests {
             .iter()
             .any(|c| c.symbol().chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)));
         assert!(drew_line, "memory tab should render a braille line");
+    }
+
+    #[test]
+    fn processes_tab_and_help_render() {
+        let mut app = App::new();
+        app.tab = Tab::Processes;
+        app.procs = vec![
+            ProcRow { pid: 501, name: "WindowServer".into(), cpu: 62.4, mem: 1_400_000_000 },
+            ProcRow { pid: 88, name: "kernel_task".into(), cpu: 3.0, mem: 320_000_000 },
+        ];
+        app.show_help = true;
+        app.paused = true;
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("WindowServer"), "process name should render");
+        assert!(text.contains("Keybindings"), "help overlay should render");
+        assert!(text.contains("PAUSED"), "paused indicator should render");
     }
 }

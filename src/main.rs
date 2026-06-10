@@ -66,12 +66,19 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 }
 
 fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+    // Esc closes the help overlay first; otherwise it quits.
+    if app.show_help && matches!(code, KeyCode::Esc | KeyCode::Char('?')) {
+        app.toggle_help();
+        return;
+    }
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.should_quit = true,
+        KeyCode::Char('?') => app.toggle_help(),
+        KeyCode::Char(' ') => app.toggle_pause(),
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
         KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
-        KeyCode::Char(c @ '1'..='4') => app.select((c as u8 - b'0') as usize),
+        KeyCode::Char(c @ '1'..='5') => app.select((c as u8 - b'0') as usize),
         _ => {}
     }
 }
