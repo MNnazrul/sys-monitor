@@ -1,6 +1,5 @@
 //! Three-pane per-tab layout: stats │ filled graph │ stats, plus a tab bar.
 use crate::app::{App, Tab};
-use crate::collect::ProcRow;
 use crate::graph::Graph;
 use crate::metric::Metric;
 use ratatui::{
@@ -51,7 +50,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_tabs(f, app, root[0]);
 
     if app.tab == Tab::Processes {
-        draw_processes(f, root[1], &app.procs, app.proc_scroll);
+        draw_processes(f, root[1], app);
     } else {
         draw_metric_panes(f, root[1], app);
     }
@@ -92,12 +91,26 @@ fn draw_metric_panes(f: &mut Frame, area: Rect, app: &App) {
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
 }
 
-/// Full-width process table (PID-ordered, stable). Scrolls via `scroll`.
-fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow], scroll: usize) {
+/// Full-width process table (PID-ordered, stable) with optional search box.
+fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
+    // Reserve a search bar when actively typing or a filter is set.
+    let show_search = app.searching || !app.search.is_empty();
+    let table_area = if show_search {
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(area);
+        draw_search_box(f, parts[0], &app.search, app.searching);
+        parts[1]
+    } else {
+        area
+    };
+
+    let procs = app.filtered_procs();
     let total = procs.len();
     // Visible rows = inner height minus the border (2) and header (1).
-    let visible = area.height.saturating_sub(3) as usize;
-    let offset = scroll.min(total.saturating_sub(1));
+    let visible = table_area.height.saturating_sub(3) as usize;
+    let offset = app.proc_scroll.min(total.saturating_sub(1));
     let end = (offset + visible).min(total);
     let shown = &procs[offset.min(total)..end];
 
@@ -138,7 +151,30 @@ fn draw_processes(f: &mut Frame, area: Rect, procs: &[ProcRow], scroll: usize) {
     .header(header)
     .column_spacing(2)
     .block(graph_block(&title));
-    f.render_widget(table, area);
+    f.render_widget(table, table_area);
+}
+
+/// One-line search input box above the process table.
+fn draw_search_box(f: &mut Frame, area: Rect, query: &str, active: bool) {
+    let cursor = if active { "▏" } else { "" };
+    let line = Line::from(vec![
+        Span::styled(" Search ", Style::default().fg(Color::Black).bg(GREEN).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(format!("{query}{cursor}"), Style::default().fg(Color::White)),
+        Span::styled(
+            if active {
+                "   (Enter: keep · Esc: clear)"
+            } else {
+                "   (/ to edit)"
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    let border = if active { GREEN } else { Color::DarkGray };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+    f.render_widget(Paragraph::new(line).block(block), area);
 }
 
 /// Centered help popup listing keybindings.
@@ -149,6 +185,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("1 – 5", "jump to tab"),
         ("↑ ↓ / j k", "scroll processes"),
         ("PgUp / PgDn", "scroll by page"),
+        ("/", "search processes (name/PID)"),
         ("space", "pause / resume"),
         ("?", "toggle this help"),
         ("q / Esc", "quit"),
@@ -340,6 +377,7 @@ fn draw_stats(f: &mut Frame, area: Rect, stats: &[(String, String)]) {
 mod tests {
     use super::*;
     use crate::app::App;
+    use crate::collect::ProcRow;
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
@@ -454,5 +492,45 @@ mod tests {
         assert!(text.contains("proc-5"), "scrolled window should show proc-5");
         assert!(!text.contains("proc-0 "), "first rows scrolled out of view");
         assert!(text.contains("of 50"), "title should show total count");
+    }
+
+    #[test]
+    fn search_filters_by_name_and_pid() {
+        let mut app = App::new();
+        app.tab = Tab::Processes;
+        app.procs = vec![
+            ProcRow { pid: 501, name: "WindowServer".into(), cpu: 1.0, mem: 1_000 },
+            ProcRow { pid: 88, name: "kernel_task".into(), cpu: 1.0, mem: 1_000 },
+            ProcRow { pid: 777, name: "Safari".into(), cpu: 1.0, mem: 1_000 },
+        ];
+
+        // Name match (case-insensitive).
+        app.search = "saf".into();
+        assert_eq!(app.filtered_procs().len(), 1);
+        assert_eq!(app.filtered_procs()[0].name, "Safari");
+
+        // PID match.
+        app.search = "88".into();
+        assert_eq!(app.filtered_procs().len(), 1);
+        assert_eq!(app.filtered_procs()[0].pid, 88);
+
+        // Empty = all.
+        app.search.clear();
+        assert_eq!(app.filtered_procs().len(), 3);
+
+        // Search box renders when active.
+        app.search = "saf".into();
+        app.searching = true;
+        let mut term = Terminal::new(TestBackend::new(90, 12)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Search"), "search box should render");
+        assert!(text.contains("Safari") && !text.contains("kernel_task"));
     }
 }

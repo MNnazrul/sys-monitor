@@ -42,6 +42,10 @@ pub struct App {
     pub procs: Vec<ProcRow>,
     /// First visible row index in the Processes table.
     pub proc_scroll: usize,
+    /// Process filter query (matches name or PID); empty = no filter.
+    pub search: String,
+    /// True while typing into the search box.
+    pub searching: bool,
     pub collector: Collector,
     pub paused: bool,
     pub show_help: bool,
@@ -55,6 +59,8 @@ impl App {
             metrics: [Metric::new(), Metric::new(), Metric::new(), Metric::new()],
             procs: Vec::new(),
             proc_scroll: 0,
+            search: String::new(),
+            searching: false,
             collector: Collector::new(),
             paused: false,
             show_help: false,
@@ -70,6 +76,26 @@ impl App {
 
     pub fn scroll_top(&mut self) {
         self.proc_scroll = 0;
+    }
+
+    /// Exit search and drop the filter.
+    pub fn cancel_search(&mut self) {
+        self.search.clear();
+        self.searching = false;
+        self.proc_scroll = 0;
+    }
+
+    /// Processes matching the current search (name substring or PID prefix).
+    /// Empty query returns all rows.
+    pub fn filtered_procs(&self) -> Vec<&ProcRow> {
+        if self.search.is_empty() {
+            return self.procs.iter().collect();
+        }
+        let q = self.search.to_lowercase();
+        self.procs
+            .iter()
+            .filter(|p| p.name.to_lowercase().contains(&q) || p.pid.to_string().contains(&q))
+            .collect()
     }
 
     pub fn next_tab(&mut self) {

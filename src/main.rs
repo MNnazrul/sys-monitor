@@ -66,6 +66,24 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 }
 
 fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+    // Search input mode captures all typing.
+    if app.searching {
+        match code {
+            KeyCode::Esc => app.cancel_search(),   // clear filter + exit
+            KeyCode::Enter => app.searching = false, // keep filter, exit input
+            KeyCode::Backspace => {
+                app.search.pop();
+                app.proc_scroll = 0;
+            }
+            KeyCode::Char(c) => {
+                app.search.push(c);
+                app.proc_scroll = 0;
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // Esc closes the help overlay first; otherwise it quits.
     if app.show_help && matches!(code, KeyCode::Esc | KeyCode::Char('?')) {
         app.toggle_help();
@@ -76,6 +94,7 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.should_quit = true,
         KeyCode::Char('?') => app.toggle_help(),
         KeyCode::Char(' ') => app.toggle_pause(),
+        KeyCode::Char('/') if app.tab == app::Tab::Processes => app.searching = true,
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
         KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
         KeyCode::Char(c @ '1'..='5') => app.select((c as u8 - b'0') as usize),
