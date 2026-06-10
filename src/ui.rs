@@ -79,17 +79,21 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_stats(f, panes[2], &metric.stats[half.min(metric.stats.len())..]);
 }
 
-/// A smooth braille line graph on a fixed 0–100 scale (used for Memory).
-/// Right-anchored: the newest sample sits at the far-right edge.
+/// A smooth braille line graph on a fixed 0–100 scale (used for CPU/Memory).
+/// Right-anchored, and left-padded with zeros so the line always begins at the
+/// 0 baseline on the left edge — no empty gap before history fills.
 fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
     let block = graph_block(&metric.title);
     let inner = block.inner(area);
     let cols = inner.width.max(1) as f64;
 
+    // Exactly `cols + 1` points: newest at x = cols, older to the left, and
+    // zeros padding the left when we don't have a full window yet.
+    let want = inner.width as usize + 1;
     let all = metric.primary();
-    // Keep one point per horizontal column (newest on the right).
-    let take = (inner.width as usize + 1).min(all.len());
-    let vis: Vec<f64> = all[all.len() - take..].iter().map(|&v| v as f64).collect();
+    let recent: Vec<f64> = all.iter().rev().take(want).rev().map(|&v| v as f64).collect();
+    let mut vis = vec![0.0; want.saturating_sub(recent.len())];
+    vis.extend(recent);
     let m = vis.len();
 
     let canvas = Canvas::default()
@@ -98,17 +102,12 @@ fn draw_line_graph(f: &mut Frame, area: Rect, metric: &Metric, color: Color) {
         .x_bounds([0.0, cols])
         .y_bounds([0.0, 100.0])
         .paint(move |ctx| {
-            if m < 2 {
-                return;
-            }
             for i in 0..m - 1 {
-                // Right-anchor: oldest visible sample maps left, newest to cols.
-                let x1 = cols - (m - 1 - i) as f64;
-                let x2 = cols - (m - 2 - i) as f64;
+                // i maps directly to x since m == cols + 1.
                 ctx.draw(&CanvasLine {
-                    x1,
+                    x1: i as f64,
                     y1: vis[i],
-                    x2,
+                    x2: (i + 1) as f64,
                     y2: vis[i + 1],
                     color,
                 });
