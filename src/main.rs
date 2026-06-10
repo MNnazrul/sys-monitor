@@ -1,5 +1,6 @@
 mod app;
 mod collect;
+mod graph;
 mod metric;
 mod ui;
 

@@ -16,6 +16,8 @@ pub fn delta(prev: &mut Option<u64>, cur: u64) -> u64 {
     out
 }
 
+const GB: f64 = 1_073_741_824.0;
+
 pub struct Collector {
     sys: System,
     nets: Networks,
@@ -33,7 +35,7 @@ impl Collector {
         }
     }
 
-    /// Refresh OS state and push one sample+headline into each metric.
+    /// Refresh OS state and push one sample into each metric.
     /// Order: [cpu, mem, net, disk, energy].
     pub fn sample(&mut self, metrics: &mut [Metric; 5]) {
         self.sample_cpu(&mut metrics[0]);
@@ -46,15 +48,19 @@ impl Collector {
     fn sample_cpu(&mut self, m: &mut Metric) {
         self.sys.refresh_cpu_all();
         let global = self.sys.global_cpu_usage();
-        let cores: Vec<String> = self
-            .sys
-            .cpus()
-            .iter()
-            .map(|c| format!("{:.0}", c.cpu_usage()))
-            .collect();
-        m.push(
+        let cores: Vec<f32> = self.sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+        let max = cores.iter().cloned().fold(0.0_f32, f32::max);
+        let min = cores.iter().cloned().fold(100.0_f32, f32::min);
+        m.update(
             global.round() as u64,
-            format!("CPU {:.0}%   cores: {}", global, cores.join(" ")),
+            None,
+            "CPU",
+            vec![
+                ("Usage".into(), format!("{global:.0}%")),
+                ("Cores".into(), format!("{}", cores.len())),
+                ("Busiest".into(), format!("{max:.0}%")),
+                ("Idlest".into(), format!("{min:.0}%")),
+            ],
         );
     }
 
@@ -62,28 +68,41 @@ impl Collector {
         self.sys.refresh_memory();
         let total = self.sys.total_memory().max(1);
         let used = self.sys.used_memory();
+        let free = total.saturating_sub(used);
         let pct = used as f64 / total as f64 * 100.0;
-        let gb = 1_073_741_824.0;
-        m.push(
+        m.update(
             pct.round() as u64,
-            format!(
-                "Mem {:.1} / {:.1} GB ({:.0}%)",
-                used as f64 / gb,
-                total as f64 / gb,
-                pct
-            ),
+            None,
+            "MEMORY",
+            vec![
+                ("Physical".into(), format!("{:.1} GB", total as f64 / GB)),
+                ("Used".into(), format!("{:.1} GB", used as f64 / GB)),
+                ("Free".into(), format!("{:.1} GB", free as f64 / GB)),
+                ("Pressure".into(), format!("{pct:.0}%")),
+            ],
         );
     }
 
     fn sample_net(&mut self, m: &mut Metric) {
         self.nets.refresh(true);
-        let (mut rx, mut tx) = (0u64, 0u64);
-        for (_, data) in self.nets.iter() {
-            rx += data.received();
-            tx += data.transmitted();
+        let (mut rx, mut tx, mut trx, mut ttx) = (0u64, 0u64, 0u64, 0u64);
+        for (_, d) in self.nets.iter() {
+            rx += d.received();
+            tx += d.transmitted();
+            trx += d.total_received();
+            ttx += d.total_transmitted();
         }
-        let total = rx + tx;
-        m.push(total, format!("↓ {}/s   ↑ {}/s", human(rx), human(tx)));
+        m.update(
+            rx,
+            Some(tx),
+            "NETWORK",
+            vec![
+                ("In/sec".into(), format!("{}/s", human(rx))),
+                ("Out/sec".into(), format!("{}/s", human(tx))),
+                ("Total in".into(), human(trx)),
+                ("Total out".into(), human(ttx)),
+            ],
+        );
     }
 
     fn sample_disk(&mut self, m: &mut Metric) {
@@ -96,56 +115,60 @@ impl Collector {
             total += d.total_space();
             used += d.total_space().saturating_sub(d.available_space());
         }
-        let gb = 1_073_741_824.0;
-        m.push(
-            r + w,
-            format!(
-                "R {}/s  W {}/s   {:.0}/{:.0} GB used",
-                human(r),
-                human(w),
-                used as f64 / gb,
-                total as f64 / gb
-            ),
+        m.update(
+            r,
+            Some(w),
+            "DISK",
+            vec![
+                ("Read/sec".into(), format!("{}/s", human(r))),
+                ("Write/sec".into(), format!("{}/s", human(w))),
+                ("Used".into(), format!("{:.0} GB", used as f64 / GB)),
+                ("Capacity".into(), format!("{:.0} GB", total as f64 / GB)),
+            ],
         );
     }
 
     fn sample_energy(&mut self, m: &mut Metric) {
+        let none = |m: &mut Metric, label: &str| {
+            m.update(
+                0,
+                None,
+                "ENERGY",
+                vec![("Status".into(), label.to_string())],
+            );
+        };
         let Some(mgr) = &self.battery else {
-            m.push(0, "no battery detected".into());
-            return;
+            return none(m, "no battery");
         };
-        let batteries = match mgr.batteries() {
-            Ok(b) => b,
-            Err(_) => {
-                m.push(0, "no battery detected".into());
-                return;
-            }
+        let Ok(batteries) = mgr.batteries() else {
+            return none(m, "no battery");
         };
-        // First battery only.
-        if let Some(Ok(bat)) = batteries.into_iter().next() {
-            use battery::units::{power::watt, ratio::percent, time::minute};
-            let watts = bat.energy_rate().get::<watt>();
-            let charge = bat.state_of_charge().get::<percent>();
-            let state = format!("{:?}", bat.state()).to_lowercase();
-            let mw = (watts * 1000.0).round() as u64;
-            let time = bat
-                .time_to_empty()
-                .map(|t| {
-                    let mins = t.get::<minute>() as u64;
-                    format!("{}h{:02}m", mins / 60, mins % 60)
-                })
-                .unwrap_or_else(|| "—".into());
-            if mw == 0 {
-                m.push(0, format!("plugged in · {:.0}%", charge));
-            } else {
-                m.push(
-                    mw,
-                    format!("{:.1} W {} · {:.0}% · {}", watts, state, charge, time),
-                );
-            }
-        } else {
-            m.push(0, "no battery detected".into());
-        }
+        let Some(Ok(bat)) = batteries.into_iter().next() else {
+            return none(m, "no battery");
+        };
+
+        use battery::units::{power::watt, ratio::percent, time::minute};
+        let watts = bat.energy_rate().get::<watt>();
+        let charge = bat.state_of_charge().get::<percent>();
+        let state = format!("{:?}", bat.state()).to_lowercase();
+        let time = bat
+            .time_to_empty()
+            .map(|t| {
+                let mins = t.get::<minute>() as u64;
+                format!("{}h{:02}m", mins / 60, mins % 60)
+            })
+            .unwrap_or_else(|| "—".into());
+        m.update(
+            (watts * 1000.0).round() as u64,
+            None,
+            "ENERGY",
+            vec![
+                ("Power".into(), format!("{watts:.1} W")),
+                ("Charge".into(), format!("{charge:.0}%")),
+                ("State".into(), state),
+                ("Time left".into(), time),
+            ],
+        );
     }
 }
 

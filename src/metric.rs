@@ -1,33 +1,54 @@
-//! A single tracked metric: a capped history of u64 samples plus a headline.
+//! A single tracked metric: capped history of one or two u64 series, a graph
+//! title, and a list of (label, value) stats for the side panels.
 use std::collections::VecDeque;
 
-pub const HISTORY: usize = 60;
+pub const HISTORY: usize = 1024;
 
+#[derive(Default)]
 pub struct Metric {
-    history: VecDeque<u64>,
-    pub headline: String,
+    primary: VecDeque<u64>,
+    secondary: VecDeque<u64>,
+    /// True once a secondary series has been pushed (net/disk in-vs-out).
+    pub dual: bool,
+    pub title: String,
+    pub stats: Vec<(String, String)>,
 }
 
 impl Metric {
     pub fn new() -> Self {
-        Self {
-            history: VecDeque::with_capacity(HISTORY),
-            headline: String::new(),
-        }
+        Self::default()
     }
 
-    /// Push a sample and headline; drops the oldest beyond HISTORY.
-    pub fn push(&mut self, value: u64, headline: String) {
-        if self.history.len() == HISTORY {
-            self.history.pop_front();
+    fn push_capped(buf: &mut VecDeque<u64>, v: u64) {
+        if buf.len() == HISTORY {
+            buf.pop_front();
         }
-        self.history.push_back(value);
-        self.headline = headline;
+        buf.push_back(v);
     }
 
-    /// Newest-last contiguous slice for the Sparkline widget.
-    pub fn data(&self) -> Vec<u64> {
-        self.history.iter().copied().collect()
+    /// Push a new sample. `secondary` present => dual mirrored graph.
+    pub fn update(
+        &mut self,
+        primary: u64,
+        secondary: Option<u64>,
+        title: impl Into<String>,
+        stats: Vec<(String, String)>,
+    ) {
+        Self::push_capped(&mut self.primary, primary);
+        if let Some(s) = secondary {
+            self.dual = true;
+            Self::push_capped(&mut self.secondary, s);
+        }
+        self.title = title.into();
+        self.stats = stats;
+    }
+
+    pub fn primary(&self) -> Vec<u64> {
+        self.primary.iter().copied().collect()
+    }
+
+    pub fn secondary(&self) -> Vec<u64> {
+        self.secondary.iter().copied().collect()
     }
 }
 
@@ -39,26 +60,30 @@ mod tests {
     fn caps_at_history_len() {
         let mut m = Metric::new();
         for i in 0..(HISTORY as u64 + 10) {
-            m.push(i, String::new());
+            m.update(i, None, "t", vec![]);
         }
-        assert_eq!(m.data().len(), HISTORY);
+        assert_eq!(m.primary().len(), HISTORY);
     }
 
     #[test]
     fn keeps_newest_and_drops_oldest() {
         let mut m = Metric::new();
         for i in 0..(HISTORY as u64 + 5) {
-            m.push(i, String::new());
+            m.update(i, None, "t", vec![]);
         }
-        let d = m.data();
+        let d = m.primary();
         assert_eq!(*d.last().unwrap(), HISTORY as u64 + 4);
-        assert_eq!(*d.first().unwrap(), 5); // 0..=4 dropped
+        assert_eq!(*d.first().unwrap(), 5);
     }
 
     #[test]
-    fn stores_headline() {
+    fn dual_flag_and_title_and_stats() {
         let mut m = Metric::new();
-        m.push(1, "CPU 5%".into());
-        assert_eq!(m.headline, "CPU 5%");
+        assert!(!m.dual);
+        m.update(1, Some(2), "NET", vec![("In".into(), "5".into())]);
+        assert!(m.dual);
+        assert_eq!(m.title, "NET");
+        assert_eq!(m.stats.len(), 1);
+        assert_eq!(m.secondary().last().copied(), Some(2));
     }
 }
