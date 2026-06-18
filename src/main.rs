@@ -66,23 +66,34 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 }
 
 fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
-    // Search input mode captures typing, but still allows list scrolling.
+    // Action menu captures keys until an entry is chosen or it's dismissed.
+    if app.menu.is_some() {
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => app.menu_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.menu_move(1),
+            KeyCode::Enter => app.menu_confirm(),
+            KeyCode::Esc | KeyCode::Char('q') => app.close_menu(),
+            _ => {}
+        }
+        return;
+    }
+
+    // Search input mode captures typing, but still allows selection moves.
     if app.searching {
         match code {
             KeyCode::Esc => app.cancel_search(),     // clear filter + exit
             KeyCode::Enter => app.searching = false, // keep filter, exit input
             KeyCode::Backspace => {
                 app.search.pop();
-                app.proc_scroll = 0;
+                app.proc_selected = 0;
             }
-            // Arrows/page keys scroll the filtered list while typing.
-            KeyCode::Up => app.scroll_procs(-1),
-            KeyCode::Down => app.scroll_procs(1),
-            KeyCode::PageUp => app.scroll_procs(-10),
-            KeyCode::PageDown => app.scroll_procs(10),
+            KeyCode::Up => app.move_selection(-1),
+            KeyCode::Down => app.move_selection(1),
+            KeyCode::PageUp => app.move_selection(-10),
+            KeyCode::PageDown => app.move_selection(10),
             KeyCode::Char(c) => {
                 app.search.push(c);
-                app.proc_scroll = 0;
+                app.proc_selected = 0;
             }
             _ => {}
         }
@@ -100,15 +111,18 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('?') => app.toggle_help(),
         KeyCode::Char(' ') => app.toggle_pause(),
         KeyCode::Char('/') if app.tab == app::Tab::Processes => app.searching = true,
-        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.next_tab(),
-        KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => app.prev_tab(),
+        KeyCode::Tab | KeyCode::Right => app.next_tab(),
+        KeyCode::BackTab | KeyCode::Left => app.prev_tab(),
         KeyCode::Char(c @ '1'..='5') => app.select((c as u8 - b'0') as usize),
-        // Process-table scrolling.
-        KeyCode::Up | KeyCode::Char('k') => app.scroll_procs(-1),
-        KeyCode::Down | KeyCode::Char('j') => app.scroll_procs(1),
-        KeyCode::PageUp => app.scroll_procs(-10),
-        KeyCode::PageDown => app.scroll_procs(10),
-        KeyCode::Home | KeyCode::Char('g') => app.scroll_top(),
+        // Process-table selection.
+        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+        KeyCode::PageUp => app.move_selection(-10),
+        KeyCode::PageDown => app.move_selection(10),
+        KeyCode::Home | KeyCode::Char('g') => app.select_first(),
+        KeyCode::End | KeyCode::Char('G') => app.select_last(),
+        // Open the action menu for the selected process.
+        KeyCode::Enter if app.tab == app::Tab::Processes => app.open_menu(),
         _ => {}
     }
 }

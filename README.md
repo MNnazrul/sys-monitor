@@ -12,6 +12,13 @@ and disk on one screen, plus a searchable, scrollable process list.
 
 ![Processes tab](public/image/s2.png)
 
+### Process actions
+
+Press `Enter` on a process to open an action menu — search, then terminate or
+force-kill the selected process.
+
+![Process action menu](public/image/s3.png)
+
 ## Features
 
 - **Overview tab** — CPU, Memory, Network, and Disk shown together in a 2×2 grid.

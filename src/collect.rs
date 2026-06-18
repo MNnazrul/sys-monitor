@@ -1,6 +1,6 @@
 //! Owns the OS handles and samples all metrics each tick.
 use crate::metric::Metric;
-use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 /// One row in the process table: pid, name, CPU%, resident memory bytes.
 #[derive(Clone)]
@@ -76,6 +76,16 @@ impl Collector {
         // update in place instead of jumping around as CPU usage changes).
         rows.sort_by_key(|r| r.pid);
         rows
+    }
+
+    /// Send a signal to a process. `hard` => SIGKILL, else SIGTERM (graceful).
+    /// Returns true if the signal was delivered.
+    pub fn kill(&self, pid: u32, hard: bool) -> bool {
+        let signal = if hard { Signal::Kill } else { Signal::Term };
+        self.sys
+            .process(Pid::from_u32(pid))
+            .and_then(|p| p.kill_with(signal))
+            .unwrap_or(false)
     }
 
     fn sample_cpu(&mut self, m: &mut Metric) {

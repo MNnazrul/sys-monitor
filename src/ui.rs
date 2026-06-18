@@ -1,5 +1,5 @@
 //! Rendering: tab bar, the Overview 2×2 graph grid, and the Processes table.
-use crate::app::{App, Tab};
+use crate::app::{ActionMenu, App, Tab};
 use crate::graph::Graph;
 use crate::metric::Metric;
 use ratatui::{
@@ -41,9 +41,60 @@ pub fn draw(f: &mut Frame, app: &App) {
         Tab::Processes => draw_processes(f, root[1], app),
     }
 
+    if let Some(menu) = &app.menu {
+        draw_action_menu(f, f.area(), menu);
+    }
     if app.show_help {
         draw_help(f, f.area());
     }
+}
+
+/// Centered per-process action menu (Terminate / Force kill / Cancel).
+fn draw_action_menu(f: &mut Frame, area: Rect, menu: &ActionMenu) {
+    let mut text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                menu.name.clone(),
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  [pid {}]", menu.pid), Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(""),
+    ];
+    for (i, item) in ActionMenu::ITEMS.iter().enumerate() {
+        let selected = i == menu.selected;
+        let marker = if selected { "▸ " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(if i == 1 { RED } else { GREEN })
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        text.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{marker}{item}"), style),
+        ]));
+    }
+    text.push(Line::from(""));
+    text.push(Line::from(Span::styled(
+        "  ↑↓ move · Enter select · Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let w = 44.min(area.width);
+    let h = (text.len() as u16 + 2).min(area.height);
+    let popup = center(area, w, h);
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Process ")
+        .title_alignment(Alignment::Center)
+        .border_style(Style::default().fg(GREEN));
+    f.render_widget(Paragraph::new(text).block(block), popup);
 }
 
 /// CPU + Memory + Network + Disk in a 2×2 grid, each a titled mini graph.
@@ -138,15 +189,18 @@ fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
     let procs = app.filtered_procs();
     let total = procs.len();
     // Visible rows = inner height minus the border (2) and header (1).
-    let visible = table_area.height.saturating_sub(3) as usize;
-    let offset = app.proc_scroll.min(total.saturating_sub(1));
+    let visible = (table_area.height.saturating_sub(3) as usize).max(1);
+    // Keep the selected row in view, roughly centered.
+    let sel = app.proc_selected.min(total.saturating_sub(1));
+    let max_off = total.saturating_sub(visible);
+    let offset = sel.saturating_sub(visible / 2).min(max_off);
     let end = (offset + visible).min(total);
     let shown = &procs[offset.min(total)..end];
 
     let header = Row::new(["PID", "NAME", "CPU %", "MEMORY"])
         .style(Style::default().fg(Color::Black).bg(GREEN).add_modifier(Modifier::BOLD));
 
-    let rows = shown.iter().map(|p| {
+    let rows = shown.iter().enumerate().map(|(i, p)| {
         let cpu_style = if p.cpu >= 50.0 {
             Style::default().fg(RED)
         } else if p.cpu >= 15.0 {
@@ -154,18 +208,23 @@ fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(Color::Gray)
         };
-        Row::new(vec![
+        let row = Row::new(vec![
             Cell::from(p.pid.to_string()),
             Cell::from(p.name.clone()),
             Cell::from(format!("{:.1}", p.cpu)).style(cpu_style),
             Cell::from(bytes(p.mem)),
-        ])
+        ]);
+        // Highlight the selected row.
+        if offset + i == sel && total > 0 {
+            row.style(Style::default().bg(Color::Rgb(40, 60, 80)).add_modifier(Modifier::BOLD))
+        } else {
+            row
+        }
     });
 
     let title = format!(
-        "Processes — {}–{} of {}",
-        (offset + 1).min(total.max(1)),
-        end,
+        "Processes — {} of {}  (Enter: menu)",
+        (sel + 1).min(total.max(1)),
         total
     );
     let table = Table::new(
@@ -192,7 +251,7 @@ fn draw_search_box(f: &mut Frame, area: Rect, query: &str, active: bool) {
         Span::styled(format!("{query}{cursor}"), Style::default().fg(Color::White)),
         Span::styled(
             if active {
-                "   (Enter: keep · Esc: clear)"
+                "   (↑↓ select · Enter keep · Esc clear)"
             } else {
                 "   (/ to edit)"
             },
@@ -209,11 +268,13 @@ fn draw_search_box(f: &mut Frame, area: Rect, query: &str, active: bool) {
 /// Centered help popup listing keybindings.
 fn draw_help(f: &mut Frame, area: Rect) {
     let lines = [
-        ("Tab / → / l", "next tab"),
-        ("Shift-Tab / ← / h", "previous tab"),
+        ("Tab / →", "next tab"),
+        ("Shift-Tab / ←", "previous tab"),
         ("1 – 2", "jump to tab"),
-        ("↑ ↓ / j k", "scroll processes"),
-        ("PgUp / PgDn", "scroll by page"),
+        ("↑ ↓ / j k", "move selection"),
+        ("PgUp / PgDn", "move by page"),
+        ("g / G", "first / last"),
+        ("Enter", "open process menu (kill)"),
         ("/", "search processes (name/PID)"),
         ("space", "pause / resume"),
         ("?", "toggle this help"),
@@ -458,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn processes_scroll_windows_rows() {
+    fn selection_windows_rows() {
         let mut app = App::new();
         app.tab = Tab::Processes;
         app.procs = (0..50)
@@ -469,7 +530,7 @@ mod tests {
                 mem: 1_000_000,
             })
             .collect();
-        app.proc_scroll = 5;
+        app.proc_selected = 30; // selection far down scrolls the window to it
         let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
         term.draw(|f| draw(f, &app)).unwrap();
         let text: String = term
@@ -479,10 +540,45 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        // Scrolled past the first rows; window starts at PID 105.
-        assert!(text.contains("proc-5"), "scrolled window should show proc-5");
-        assert!(!text.contains("proc-0 "), "first rows scrolled out of view");
+        assert!(text.contains("proc-30"), "selected row should be visible");
+        assert!(!text.contains("proc-0 "), "top rows scroll out of view");
         assert!(text.contains("of 50"), "title should show total count");
+    }
+
+    #[test]
+    fn action_menu_flow() {
+        let mut app = App::new();
+        app.tab = Tab::Processes;
+        app.procs = vec![
+            ProcRow { pid: 100, name: "alpha".into(), cpu: 0.0, mem: 1_000 },
+            ProcRow { pid: 200, name: "beta".into(), cpu: 0.0, mem: 1_000 },
+        ];
+        app.proc_selected = 1;
+
+        // Enter opens the menu for the selected process.
+        app.open_menu();
+        let m = app.menu.as_ref().expect("menu open");
+        assert_eq!((m.pid, m.name.as_str(), m.selected), (200, "beta", 0));
+
+        // Menu renders the target and its options.
+        let mut term = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        term.draw(|f| draw(f, &app)).unwrap();
+        let text: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("beta"), "menu names the target process");
+        assert!(text.contains("Terminate"), "menu lists Terminate");
+        assert!(text.contains("Force kill"), "menu lists Force kill");
+
+        // Cursor moves; close clears it.
+        app.menu_move(1);
+        assert_eq!(app.menu.as_ref().unwrap().selected, 1);
+        app.close_menu();
+        assert!(app.menu.is_none(), "menu closes");
+
+        // Choosing "Cancel" (index 2) closes without killing.
+        app.open_menu();
+        app.menu_move(2);
+        app.menu_confirm();
+        assert!(app.menu.is_none(), "confirm closes the menu");
     }
 
     #[test]
@@ -525,4 +621,6 @@ mod tests {
         assert!(text.contains("Safari") && !text.contains("kernel_task"));
     }
 }
+
+
 
