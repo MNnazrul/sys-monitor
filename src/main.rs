@@ -121,6 +121,9 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::PageDown => app.move_selection(10),
         KeyCode::Home | KeyCode::Char('g') => app.select_first(),
         KeyCode::End | KeyCode::Char('G') => app.select_last(),
+        // Sort the process table.
+        KeyCode::Char('s') if app.tab == app::Tab::Processes => app.cycle_sort(),
+        KeyCode::Char('r') if app.tab == app::Tab::Processes => app.toggle_sort_dir(),
         // Open the action menu for the selected process.
         KeyCode::Enter if app.tab == app::Tab::Processes => app.open_menu(),
         _ => {}

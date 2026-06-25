@@ -1,5 +1,5 @@
 //! Rendering: tab bar, the Overview 2×2 graph grid, and the Processes table.
-use crate::app::{ActionMenu, App, Tab};
+use crate::app::{ActionMenu, App, SortKey, Tab};
 use crate::graph::Graph;
 use crate::metric::Metric;
 use ratatui::{
@@ -197,7 +197,26 @@ fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
     let end = (offset + visible).min(total);
     let shown = &procs[offset.min(total)..end];
 
-    let header = Row::new(["PID", "NAME", "CPU %", "MEMORY"])
+    // Header with a ▲/▼ marker on the active sort column.
+    let active_col = match app.sort_key {
+        SortKey::Pid => 0,
+        SortKey::Name => 1,
+        SortKey::Cpu => 2,
+        SortKey::Mem => 3,
+    };
+    let arrow = if app.sort_desc { " ▼" } else { " ▲" };
+    let header_cells: Vec<String> = ["PID", "NAME", "CPU %", "MEMORY"]
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            if i == active_col {
+                format!("{label}{arrow}")
+            } else {
+                label.to_string()
+            }
+        })
+        .collect();
+    let header = Row::new(header_cells)
         .style(Style::default().fg(Color::Black).bg(GREEN).add_modifier(Modifier::BOLD));
 
     let rows = shown.iter().enumerate().map(|(i, p)| {
@@ -223,7 +242,7 @@ fn draw_processes(f: &mut Frame, area: Rect, app: &App) {
     });
 
     let title = format!(
-        "Processes — {} of {}  (Enter: menu)",
+        "Processes — {} of {}  (s: sort · Enter: menu)",
         (sel + 1).min(total.max(1)),
         total
     );
@@ -274,6 +293,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("↑ ↓ / j k", "move selection"),
         ("PgUp / PgDn", "move by page"),
         ("g / G", "first / last"),
+        ("s / r", "cycle sort column / reverse"),
         ("Enter", "open process menu (kill)"),
         ("/", "search processes (name/PID)"),
         ("space", "pause / resume"),
@@ -621,6 +641,7 @@ mod tests {
         assert!(text.contains("Safari") && !text.contains("kernel_task"));
     }
 }
+
 
 
 

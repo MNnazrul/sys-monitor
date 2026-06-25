@@ -66,12 +66,14 @@ cargo run --release
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `→` / `l` | next tab |
-| `Shift-Tab` / `←` / `h` | previous tab |
+| `Tab` / `→` | next tab |
+| `Shift-Tab` / `←` | previous tab |
 | `1` – `2` | jump to tab (Overview / Processes) |
-| `↑` `↓` / `j` `k` | scroll the process list |
-| `PgUp` / `PgDn` | scroll by a page |
-| `Home` / `g` | jump to the top of the list |
+| `↑` `↓` / `j` `k` | move selection in the process list |
+| `PgUp` / `PgDn` | move by a page |
+| `Home` `g` / `End` `G` | first / last process |
+| `s` / `r` | cycle sort column (PID/CPU/memory/name) / reverse |
+| `Enter` | open the action menu for the selected process (terminate / force kill) |
 | `/` | search processes by name or PID (Enter keeps, Esc clears) |
 | `space` | pause / resume sampling |
 | `?` | toggle the help overlay |
@@ -105,8 +107,6 @@ cargo clippy    # lint
 More features are on the way:
 
 - **Per-core CPU** sparklines (one mini graph per core)
-- **Kill / signal** a selected process from the Processes tab
-- **Sortable** process table (by CPU, memory, name)
 - **GPU usage** and **temperature / fan** sensors
 - **Per-interface network** and **per-volume disk** breakdowns
 - **Configurable** refresh rate and color themes

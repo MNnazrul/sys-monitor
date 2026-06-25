@@ -60,7 +60,7 @@ impl Collector {
             ProcessRefreshKind::nothing().with_cpu().with_memory(),
         );
         let ncpu = self.sys.cpus().len().max(1) as f32;
-        let mut rows: Vec<ProcRow> = self
+        let rows: Vec<ProcRow> = self
             .sys
             .processes()
             .iter()
@@ -72,9 +72,8 @@ impl Collector {
                 mem: p.memory(),
             })
             .collect();
-        // Sort by PID so rows keep a stable position across ticks (values
-        // update in place instead of jumping around as CPU usage changes).
-        rows.sort_by_key(|r| r.pid);
+        // Ordering is applied by the app (App::sort_procs) per the active
+        // sort column, so no sorting is needed here.
         rows
     }
 
